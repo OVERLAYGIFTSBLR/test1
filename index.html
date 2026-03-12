@@ -1,324 +1,239 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AR Memory | Elite</title>
+const MAIN_FOLDER_ID = "1c2M4eaAXJP9BtY966Y4DP3cVWnQ3SxkV";
+const SHEET_ID = "1niGviqWvuLgEja1laZgJ3ghWgvswFNiu0ynHlHGV2HQ";
 
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&display=swap');
+const MAX_UPLOADS = 3;
+const MAX_VIEWERS = 3;
+const SESSION_TIMEOUT = 60000; // 60 seconds
 
-  :root {
-    --neon: #00ff99;
-    --neon-muted: rgba(0, 255, 153, 0.15);
-    --bg-black: #080808;
-    --surface: #121212;
-  }
+/* ===========================
+  UPLOAD API (POST)
+=========================== */
+function doPost(e) {
 
-  body {
-    margin: 0;
-    padding: 0;
-    font-family: 'Space Grotesk', sans-serif;
-    background-color: var(--bg-black);
-    color: #fff;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    overflow: hidden;
-  }
+ try {
 
-  /* Decorative Background Elements */
-  .bg-glow {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    background: radial-gradient(circle at 50% 50%, #111 0%, #000 100%);
-    z-index: -1;
-  }
+   const data = JSON.parse(e.postData.contents);
 
-  .card-elite {
-    width: 90%;
-    max-width: 370px;
-    background: var(--surface);
-    border-radius: 40px;
-    padding: 40px 25px;
-    box-shadow: 0 0 50px rgba(0,0,0,1), inset 0 1px 1px rgba(255,255,255,0.1);
-    text-align: center;
-    position: relative;
-    border: 1px solid #222;
-  }
+   const productId = data.productId;
+   const base64Data = data.file;
+   const fileName = data.fileName;
 
-  .status-pill {
-    display: inline-block;
-    padding: 4px 12px;
-    background: #000;
-    border: 1px solid #333;
-    border-radius: 100px;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    color: #666;
-    margin-bottom: 25px;
-  }
+   if (!productId) {
+     throw new Error("Product ID missing");
+   }
 
-  h2 {
-    font-size: 28px;
-    margin: 0;
-    font-weight: 700;
-    letter-spacing: -1px;
-  }
+   const parentFolder = DriveApp.getFolderById(MAIN_FOLDER_ID);
+   const sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
+   const sheetData = sheet.getDataRange().getValues();
 
-  .desc {
-    color: #555;
-    font-size: 14px;
-    margin-bottom: 30px;
-  }
+   let rowIndex = -1;
+   let uploadCount = 0;
+   let oldFileId = null;
 
-  /* Holographic Drop Zone */
-  .holo-zone {
-    width: 100%;
-    aspect-ratio: 1/1;
-    background: #000;
-    border-radius: 30px;
-    margin-bottom: 30px;
-    border: 1px solid #222;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    cursor: pointer;
-    position: relative;
-    transition: 0.4s;
-    overflow: hidden;
-  }
+   // Check if ProductID exists
+   for (let i = 1; i < sheetData.length; i++) {
 
-  .holo-zone:hover {
-    border-color: var(--neon);
-    box-shadow: 0 0 20px var(--neon-muted);
-  }
+     if (sheetData[i][0] === productId) {
 
-  .holo-zone::after {
-    content: "";
-    position: absolute;
-    top: -50%; left: -50%; width: 200%; height: 200%;
-    background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
-    transform: rotate(45deg);
-    animation: shine 4s infinite;
-  }
+       rowIndex = i + 1;
+       uploadCount = Number(sheetData[i][3]) || 0;
+       oldFileId = sheetData[i][1];
 
-  @keyframes shine {
-    0% { transform: translateX(-100%) rotate(45deg); }
-    100% { transform: translateX(100%) rotate(45deg); }
-  }
+       break;
 
-  #videoPreview {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: none;
-    z-index: 2;
-  }
+     }
 
-  .upload-prompt {
-    z-index: 1;
-    transition: 0.3s;
-  }
+   }
 
-  /* The Elite Button */
-  .btn-elite {
-    width: 100%;
-    padding: 22px;
-    border-radius: 20px;
-    border: none;
-    background: linear-gradient(135deg, #fff 0%, #d1d1d1 100%);
-    color: #000;
-    font-size: 18px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: 0.3s;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
+   // Block if max uploads reached
+   if (uploadCount >= MAX_UPLOADS) {
 
-  .btn-elite:hover {
-    background: var(--neon);
-    box-shadow: 0 15px 30px var(--neon-muted);
-    transform: translateY(-3px);
-  }
+     return ContentService.createTextOutput(
+       JSON.stringify({
+         status: "blocked",
+         message: "Upload limit reached (3 lifetime uploads used)"
+       })
+     ).setMimeType(ContentService.MimeType.JSON);
 
-  /* Linear Progress */
-  .progress-wrap {
-    margin-top: 30px;
-    display: none;
-  }
+   }
 
-  .bar-container {
-    width: 100%;
-    height: 2px;
-    background: #222;
-    position: relative;
-  }
+   // Delete old file
+   if (oldFileId) {
 
-  .bar-fill {
-    height: 100%;
-    width: 0%;
-    background: var(--neon);
-    box-shadow: 0 0 10px var(--neon);
-    transition: width 0.5s ease;
-  }
+     try {
 
-  #status-msg {
-    margin-top: 12px;
-    font-size: 11px;
-    color: #444;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
+       DriveApp.getFileById(oldFileId).setTrashed(true);
 
-  input[type="file"] { display: none; }
+     } catch (err) {
 
-  /* Toast */
-  #toast {
-    visibility: hidden;
-    position: fixed;
-    top: 20px;
-    background: #ff3333;
-    color: white;
-    padding: 10px 25px;
-    border-radius: 50px;
-    font-size: 12px;
-    font-weight: bold;
-    z-index: 1000;
-  }
-  #toast.show { visibility: visible; animation: dropDown 2.5s; }
+       Logger.log("Old file deletion failed: " + err);
 
-  @keyframes dropDown {
-    0% { transform: translateY(-50px); opacity: 0; }
-    15% { transform: translateY(0); opacity: 1; }
-    85% { transform: translateY(0); opacity: 1; }
-    100% { transform: translateY(-50px); opacity: 0; }
-  }
-</style>
-</head>
-<body>
+     }
 
-<div class="bg-glow"></div>
+   }
 
-<div class="card-elite">
-  <div class="status-pill">System Ready • <span id="productLabel">...</span></div>
-  
-  <h2>Activate AI Gift</h2>
-  <p class="desc">Link your to a your Video</p>
+   // Get or create product folder
+   let folders = parentFolder.getFoldersByName(productId);
 
-  <div class="holo-zone" onclick="document.getElementById('videoFile').click()">
-    <div class="upload-prompt" id="promptText">
-      <div style="font-size: 40px; margin-bottom: 10px; filter: grayscale(1);">⚡</div>
-      <div style="font-weight: 500;">CHOOSE MEMORY</div>
-    </div>
-    <video id="videoPreview" autoplay muted loop playsinline></video>
-  </div>
+   let productFolder = folders.hasNext()
+     ? folders.next()
+     : parentFolder.createFolder(productId);
 
-  <input type="hidden" id="productId">
-  <input type="file" id="videoFile" accept="video/*" onchange="previewFile(this)">
+   // Decode video
+   const decoded = Utilities.base64Decode(base64Data);
+   const blob = Utilities.newBlob(decoded, "video/mp4", fileName);
+   const file = productFolder.createFile(blob);
 
-  <button class="btn-elite" id="uploadBtn" onclick="initiateUpload()">Upload & Link</button>
+   // Make file public
+   file.setSharing(
+     DriveApp.Access.ANYONE_WITH_LINK,
+     DriveApp.Permission.VIEW
+   );
 
-  <div class="progress-wrap" id="progressBox">
-    <div class="bar-container">
-      <div class="bar-fill" id="progressBar"></div>
-    </div>
-    <div id="status-msg">Awaiting data...</div>
-  </div>
-</div>
+   const fileId = file.getId();
 
-<div id="toast">SYSTEM RESTRICTION: ACTION BLOCKED</div>
+   const videoURL =
+     "https://drive.google.com/uc?export=download&id=" + fileId;
 
-<script>
-// --- FUNCTIONALITY (MAINTAINED) ---
-const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwMs9D-Wzn0mwpXrxW042c2M5DBzr3qx8ur2FNmMjyOTHZRWTHKnr2WPSRiGkr1dCEt/exec";
+   const newUploadCount = uploadCount + 1;
 
-// Security - Anti-Inspect
-document.addEventListener('contextmenu', e => e.preventDefault());
-document.addEventListener("keydown", e => {
-  if (e.key === "F12" || (e.ctrlKey && e.shiftKey && "IJC".includes(e.key)) || (e.ctrlKey && e.key === "u")) {
-    e.preventDefault();
-    const t = document.getElementById("toast");
-    t.className = "show";
-    setTimeout(() => { t.className = ""; }, 2500);
-  }
-});
+   // Update existing row OR create new row
+   if (rowIndex > -1) {
 
-// Load Configuration
-window.onload = () => {
-  const pId = new URLSearchParams(window.location.search).get("product");
-  if(pId) {
-    document.getElementById("productId").value = pId;
-    document.getElementById("productLabel").innerText = pId;
-  } else {
-    document.getElementById("status-msg").innerText = "Error: Invalid Handshake";
-    document.getElementById("uploadBtn").disabled = true;
-  }
-};
+     sheet.getRange(rowIndex, 2, 1, 4).setValues([
+       [fileId, videoURL, newUploadCount, new Date()]
+     ]);
 
-// Holographic Preview
-function previewFile(input) {
-  const file = input.files[0];
-  if (file) {
-    document.getElementById('promptText').style.display = 'none';
-    const preview = document.getElementById('videoPreview');
-    preview.src = URL.createObjectURL(file);
-    preview.style.display = 'block';
-  }
+   } else {
+
+     sheet.appendRow([
+       productId,
+       fileId,
+       videoURL,
+       1,
+       new Date(),
+       ""   // session column
+     ]);
+
+   }
+
+   return ContentService.createTextOutput(
+     JSON.stringify({
+       status: "success",
+       uploadCount: newUploadCount,
+       remaining: MAX_UPLOADS - newUploadCount
+     })
+   ).setMimeType(ContentService.MimeType.JSON);
+
+ } catch (err) {
+
+   return ContentService.createTextOutput(
+     JSON.stringify({
+       status: "error",
+       message: err.toString()
+     })
+   ).setMimeType(ContentService.MimeType.JSON);
+
+ }
+
 }
 
-// Upload Logic
-async function initiateUpload() {
-  const file = document.getElementById("videoFile").files[0];
-  const pId = document.getElementById("productId").value;
-  const status = document.getElementById("status-msg");
-  const bar = document.getElementById("progressBar");
-  const box = document.getElementById("progressBox");
-  const btn = document.getElementById("uploadBtn");
 
-  if (!file) return;
-  if (file.size > 10 * 1024 * 1024) { status.innerText = "OVERSIZE DETECTED (MAX 10MB)"; return; }
+/* ===========================
+  FETCH VIDEO API (GET)
+  WITH 3 DEVICE LIMIT
+=========================== */
 
-  btn.disabled = true;
-  btn.innerText = "Syncing...";
-  box.style.display = "block";
-  bar.style.width = "30%";
+function doGet(e) {
 
-  const reader = new FileReader();
-  reader.readAsDataURL(file);
-  reader.onload = async () => {
-    const base64 = reader.result.split(',')[1];
-    bar.style.width = "60%";
-    status.innerText = "Encrypting memory packet...";
-    
-    try {
-      // POST logic remains the same to ensure it works with your script
-      await fetch(WEB_APP_URL, {
-        method: "POST",
-        mode: "no-cors",
-        cache: "no-cache",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: pId, file: base64, fileName: file.name })
-      });
+ try {
 
-      bar.style.width = "100%";
-      status.style.color = "var(--neon)";
-      status.innerText = "Data Transferred Successfully";
-      btn.innerText = "Linked";
-      
-    } catch (err) {
-      status.innerText = "UPLINK FAILED. RETRY.";
-      btn.disabled = false;
-      btn.innerText = "Retry Link";
-    }
-  };
+   const productId = e.parameter.id;
+   const deviceId = e.parameter.device;
+
+   if (!productId || !deviceId) {
+
+     throw new Error("Missing parameters");
+
+   }
+
+   const sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
+   const data = sheet.getDataRange().getValues();
+
+   const now = new Date().getTime();
+
+   for (let i = 1; i < data.length; i++) {
+
+     if (data[i][0] === productId) {
+
+       let sessions = [];
+
+       if (data[i][5]) {
+
+         sessions = JSON.parse(data[i][5]);
+
+       }
+
+       // Remove expired sessions
+       sessions = sessions.filter(s => {
+
+         return now - s.time < SESSION_TIMEOUT;
+
+       });
+
+       // Check if device already exists
+       let exists = sessions.find(s => s.device === deviceId);
+
+       if (!exists) {
+
+         if (sessions.length >= MAX_VIEWERS) {
+
+           return ContentService.createTextOutput(
+             JSON.stringify({
+               status: "blocked",
+               message: "Maximum 3 viewers already watching"
+             })
+           ).setMimeType(ContentService.MimeType.JSON);
+
+         }
+
+         sessions.push({
+           device: deviceId,
+           time: now
+         });
+
+       }
+
+       // Save updated sessions
+       sheet.getRange(i + 1, 6).setValue(JSON.stringify(sessions));
+
+       return ContentService.createTextOutput(
+         JSON.stringify({
+           status: "allowed",
+           videoURL: data[i][2],
+           viewers: sessions.length
+         })
+       ).setMimeType(ContentService.MimeType.JSON);
+
+     }
+
+   }
+
+   return ContentService.createTextOutput(
+     JSON.stringify({
+       status: "not_found"
+     })
+   ).setMimeType(ContentService.MimeType.JSON);
+
+ } catch (err) {
+
+   return ContentService.createTextOutput(
+     JSON.stringify({
+       status: "error",
+       message: err.toString()
+     })
+   ).setMimeType(ContentService.MimeType.JSON);
+
+ }
+
 }
-</script>
-
-</body>
-</html>
